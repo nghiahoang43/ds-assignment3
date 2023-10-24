@@ -112,6 +112,7 @@ public class VoteServer implements MessageHandler {
         currentMember.setAcceptedProposalPair(parts[1], newPair);
       }
       if (promiseCount.get(proposalNumber) > members.size() / 2) {
+        System.out.println("Proposal " + proposalNumber + " is accepted by the majority");
         cancelTimeout("proposal:" + proposalNumber);
         String proposalValue = currentMember.getAcceptedProposalPair() != null
             ? currentMember.getAcceptedProposalPair().getProposalValue()
