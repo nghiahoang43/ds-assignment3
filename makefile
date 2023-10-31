@@ -19,6 +19,7 @@ TEST_MAIN_CLASS = org.junit.platform.console.ConsoleLauncher
 all: compile
 
 compile:
+	mkdir -p bin
 	javac $(CPTEST) $(MAIN_SOURCES) -d bin
 
 compile-test: compile
