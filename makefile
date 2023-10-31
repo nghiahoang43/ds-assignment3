@@ -12,8 +12,6 @@ TEST_SOURCES = src/test/PaxosTest.java \
 					src/test/MemberTest.java \
 					src/test/VoteServerTest.java
 
-# TEST_SOURCES = src/test/MemberTest.java
-
 TEST_MAIN_CLASS = org.junit.platform.console.ConsoleLauncher
 
 all: compile
