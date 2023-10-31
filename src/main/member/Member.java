@@ -1,8 +1,5 @@
 package main.member;
 
-import java.net.Socket;
-import java.util.Map;
-
 import main.communication.Communication;
 import main.voteServer.VoteServer;
 
@@ -14,12 +11,30 @@ public class Member {
   private AcceptedProposalPair acceptedProposalPair;
   private final VoteServer voteServer;
   private final String memberProposalValue;
+  private int delayTime;
+  private boolean isForcedOffline;
+  private boolean isRandomOffline;
 
   public Member(String memberId, Communication communication, VoteServer voteServer) {
     this.memberId = memberId;
     this.communication = communication;
-    this.voteServer = voteServer; // Initialize voteServer here
-    this.memberProposalValue = "Value of member " + memberId;
+    this.voteServer = voteServer;
+    this.memberProposalValue = memberId;
+
+    switch (Integer.parseInt(memberId)) {
+      case 1:
+        this.delayTime = 0;
+        break;
+      case 2:
+        this.delayTime = 10000;
+        break;
+      case 3:
+        this.delayTime = (int) (Math.random() * 5000) + 4000;
+        break;
+      default:
+        this.delayTime = (int) (Math.random() * 5000) + 4000;
+        break;
+    }
   }
 
   public String getMemberId() {
@@ -33,14 +48,6 @@ public class Member {
   public String generateProposalNumber() {
     count++;
     return memberId + ":" + count;
-  }
-
-  public void sendPrepareRequest() {
-    System.out.println("Sending prepare request from member " + memberId);
-    // Initialize proposal number of the prepare request
-    String proposalNumber = generateProposalNumber();
-    // Send prepare request to all members
-    voteServer.broadcast("PREPARE " + proposalNumber);
   }
 
   public void setHighestSeenProposalNumber(String proposalNumber) {
@@ -69,35 +76,117 @@ public class Member {
     }
   }
 
+  public void setDelayTime(int delayTime) {
+    this.delayTime = delayTime;
+  }
+
+  private boolean goOffline() {
+    if (isForcedOffline) {
+      return true;
+    }
+    if (isRandomOffline && Integer.parseInt(this.memberId) == 3) {
+      int random = (int) (Math.random() * 100);
+      if (random <= 5) {
+        System.out.println("Member " + memberId + " is offline");
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
+  public void forceOffline() {
+    this.isForcedOffline = true;
+  }
+
+  public void turnOnRandomOffline() {
+    this.isRandomOffline = true;
+  }
+
+  public int getDelayTime() {
+    return this.delayTime;
+  }
+
+  public void sendPrepareRequest() {
+    try {
+      Thread.sleep(delayTime);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
+    String proposalNumber = generateProposalNumber();
+    String message = "PREPARE " + proposalNumber;
+    voteServer.broadcast(message);
+  }
+
   public void sendPromise(String proposerId, String proposalNumber, AcceptedProposalPair acceptedProposalPair) {
-    Map<String, Socket> socketMap = voteServer.getSocketMap();
-    System.out.println(memberId + " send promise to " + proposerId);
+    if (goOffline()) {
+      return;
+    }
+    try {
+      Thread.sleep(delayTime);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
+
     if (acceptedProposalPair == null) {
-      communication.sendMessage(socketMap, proposerId, "PROMISE " + proposalNumber);
+      communication.sendMessage(proposerId, "PROMISE " + proposalNumber);
     } else {
-      communication.sendMessage(socketMap, proposerId,
+      communication.sendMessage(proposerId,
           "PROMISE " + proposalNumber + " " + acceptedProposalPair.getProposalNumber() + " "
               + acceptedProposalPair.getProposalValue());
     }
   }
 
-  public void sendAcceptRequest(String proposalNumber, String proposalValue) {
+  public synchronized void sendAcceptRequest(String proposalNumber, String proposalValue, String currentMemberId) {
+    if (goOffline()) {
+      return;
+    }
+    try {
+      Thread.sleep(delayTime);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
     if (proposalValue == null) {
-      proposalValue = this.memberProposalValue;
+      proposalValue = currentMemberId;
     }
     voteServer.broadcast("ACCEPT " + proposalNumber + " " + proposalValue);
   }
 
   public void sendReject(String proposalNumber) {
-    Map<String, Socket> socketMap = voteServer.getSocketMap();
-    communication.sendMessage(socketMap, memberId, "REJECT " + proposalNumber);
+    if (goOffline()) {
+      return;
+    }
+    try {
+      Thread.sleep(delayTime);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
+    communication.sendMessage(memberId, "REJECT " + proposalNumber);
   }
 
-  public void sendAccepted(String proposalNumber, String proposalValue) {
-    voteServer.broadcast("ACCEPTED " + proposalNumber + " " + proposalValue);
+  public void sendAccepted(String proposerId, String proposalNumber, String comingAcceptedValue) {
+    if (goOffline()) {
+      return;
+    }
+    try {
+      Thread.sleep(delayTime);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
+    communication.sendMessage(proposerId,
+        "ACCEPTED " + proposalNumber + " "
+            + comingAcceptedValue);
   }
 
-  public void sendResult(String result) {
-    voteServer.broadcast("RESULT " + result); // Broadcasting result to all members
+  public void sendResult(String proposalNumber, String proposalValue) {
+    if (goOffline()) {
+      return;
+    }
+    try {
+      Thread.sleep(delayTime);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
+    voteServer.broadcast("RESULT " + proposalNumber + " " + proposalValue);
   }
 }

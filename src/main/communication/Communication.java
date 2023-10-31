@@ -2,8 +2,6 @@ package main.communication;
 
 import java.io.*;
 import java.net.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.Map;
 
 import main.voteServer.MessageHandler;
 
@@ -15,18 +13,29 @@ public class Communication {
     this.messageHandler = messageHandler;
   }
 
-  ServerSocket getServerSocket() {
+  public ServerSocket getServerSocket() {
     return this.serverSocket;
+  }
+
+  public void closeServerSocket() {
+    if (serverSocket == null || serverSocket.isClosed()) {
+      return;
+    }
+    try {
+      serverSocket.close();
+      System.out.println("Election done. Server socket closed.");
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
   }
 
   public void startServer(int port, String memberId) {
     try {
       serverSocket = new ServerSocket(port);
-      System.out.println("Server started on port " + port);
       new Thread(new Runnable() {
         @Override
         public void run() {
-          while (true) {
+          while (!serverSocket.isClosed()) {
             try {
               Socket clientSocket = serverSocket.accept();
 
@@ -48,14 +57,16 @@ public class Communication {
   }
 
   private void handleSocket(String memberId, Socket socket) {
+    if (socket == null || socket.isClosed()) {
+      return;
+    }
     try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
       String message;
       while ((message = in.readLine()) != null) {
-        messageHandler.setCurrentMember(memberId);
-        messageHandler.handleMessage(message);
+        messageHandler.handleMessage(message, memberId);
       }
     } catch (IOException e) {
-      e.printStackTrace();
+
     } finally {
       try {
         socket.close(); // Close the socket
@@ -65,17 +76,14 @@ public class Communication {
     }
   }
 
-  public void sendMessage(Map<String, Socket> socketMap, String memberId, String message) {
-    // Surround the socket creation and message sending code with try-catch to
-    // handle exceptions
+  public synchronized void sendMessage(String memberId, String message) {
     try {
       Socket socket = new Socket("localhost", messageHandler.getPortMap().get(memberId));
-
       if (socket != null && !socket.isClosed()) { // Check if the socket exists and is open
-        try (PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
-          out.println(message);
-        } // This will automatically close the PrintWriter
+        PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+        out.println(message);
       }
+      socket.close();
     } catch (UnknownHostException e) {
       e.printStackTrace();
       System.out.println("Unknown host exception occurred while sending message.");

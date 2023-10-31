@@ -1,12 +1,15 @@
 package main.voteServer;
 
 import java.util.*;
+import java.io.IOException;
 import java.net.*;
 import java.util.concurrent.*;
 
 import main.communication.Communication;
 import main.member.AcceptedProposalPair;
 import main.member.Member;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 public class VoteServer implements MessageHandler {
   private List<Member> members;
@@ -15,10 +18,10 @@ public class VoteServer implements MessageHandler {
   Communication communication;
   Map<String, Socket> socketMap = new HashMap<>();
   Map<String, Integer> portMap = new HashMap<>();
-  private Member currentMember;
   private final Object lock = new Object();
   private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
   private final Map<String, ScheduledFuture<?>> timeouts = new ConcurrentHashMap<>();
+  private String president = null;
 
   public VoteServer() {
     this.promiseCount = new HashMap<>();
@@ -37,36 +40,34 @@ public class VoteServer implements MessageHandler {
   }
 
   @Override
-  public void setCurrentMember(String memberId) {
-    this.currentMember = members.stream().filter(member -> member.getMemberId().equals(memberId)).findFirst().get();
-  }
-
-  @Override
   public Map<String, Integer> getPortMap() {
     return this.portMap;
   }
 
   @Override
-  public void handleMessage(String message) {
+  public void handleMessage(String message, String memberId) {
+    if (president != null) {
+      closeAllSockets();
+      return;
+    }
     String[] parts = message.split(" ");
-    String messageType = parts[0];
-    if (messageType.startsWith("PREPARE")) {
-      handlePrepareRequest(message);
-    } else if (messageType.startsWith("PROMISE")) {
-      handlePromise(message);
-      // Parse message and send promise
-    } else if (messageType.startsWith("ACCEPT")) {
-      handleAcceptRequest(message);
-    } else if (messageType.startsWith("ACCEPTED")) {
-      handleAccepted(message);
+    String messageType = parts[0].trim();
+    if (messageType.equals("PREPARE")) {
+      handlePrepareRequest(message, memberId);
+    } else if (messageType.equals("PROMISE")) {
+      handlePromise(message, memberId);
+    } else if (messageType.equals("ACCEPT")) {
+      handleAcceptRequest(message, memberId);
+    } else if (messageType.equals("ACCEPTED")) {
+      handleAccepted(message, memberId);
     } else {
-      System.out.println("Received message: " + message);
+      handleReject(message, memberId);
     }
   }
 
   public void broadcast(String message) {
     for (Member member : members) {
-      communication.sendMessage(socketMap, member.getMemberId(), message);
+      communication.sendMessage(member.getMemberId(), message);
     }
   }
 
@@ -79,11 +80,18 @@ public class VoteServer implements MessageHandler {
     socketMap.put(memberId, socket);
   }
 
-  private void handlePrepareRequest(String message) {
-    // System.out.println("message: " + message);
+  private void handlePrepareRequest(String message, String memberId) {
     String[] parts = message.split(" ");
     String proposalNumber = parts[1];
     String proposerId = parts[1].split(":")[0];
+    LocalDateTime now = LocalDateTime.now();
+    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+    String formattedDateTime = now.format(formatter);
+    System.out
+        .println("[" + formattedDateTime + "]" + " Member " + memberId + " received prepareRequest from proposer "
+            + proposerId
+            + " with proposalNumber " + proposalNumber);
+    Member currentMember = members.stream().filter(m -> m.getMemberId().equals(memberId)).findFirst().get();
     if (currentMember.getHighestSeenProposalNumber() == null
         || compareProposalNumbers(proposalNumber, currentMember.getHighestSeenProposalNumber())) {
       currentMember.setHighestSeenProposalNumber(proposalNumber);
@@ -100,56 +108,95 @@ public class VoteServer implements MessageHandler {
     scheduleTimeoutForProposal(proposalNumber);
   }
 
-  private void handlePromise(String message) {
+  private void handlePromise(String message, String memberId) {
     synchronized (lock) {
+      Member currentMember = members.stream().filter(m -> m.getMemberId().equals(memberId)).findFirst().get();
+      LocalDateTime now = LocalDateTime.now();
+      DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+      String formattedDateTime = now.format(formatter);
+      System.out.println(
+          "[" + formattedDateTime + "]" + " Proposer " + memberId + " received promise from member " + memberId);
       String[] parts = message.split(" ");
-      String proposalNumber = parts[1]; // Corrected string splitting
+      String proposalNumber = parts[1];
       promiseCount.put(proposalNumber, promiseCount.getOrDefault(proposalNumber, 0) + 1);
-      System.out.println("promiseCount: " + promiseCount.get(proposalNumber));
+
       if (parts.length > 2) {
         AcceptedProposalPair newPair = new AcceptedProposalPair();
         newPair.setAcceptedProposalPair(parts[2], parts[3]);
         currentMember.setAcceptedProposalPair(parts[1], newPair);
       }
-      if (promiseCount.get(proposalNumber) > members.size() / 2) {
-        System.out.println("Proposal " + proposalNumber + " is accepted by the majority");
+
+      if (promiseCount.get(proposalNumber) == 5) {
+        now = LocalDateTime.now();
+        formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+        formattedDateTime = now.format(formatter);
+        System.out
+            .println("[" + formattedDateTime + "]" + " Proposal " + proposalNumber + " IS PROMISED BY THE MAJORITY");
+
         cancelTimeout("proposal:" + proposalNumber);
-        String proposalValue = currentMember.getAcceptedProposalPair() != null
-            ? currentMember.getAcceptedProposalPair().getProposalValue()
-            : null;
+        String proposalValue;
         if (currentMember.getAcceptedProposalPair() != null) {
           proposalValue = currentMember.getAcceptedProposalPair().getProposalValue();
         } else {
-          proposalValue = currentMember.getMemberProposalValue();
+          proposalValue = null;
         }
-        currentMember.sendAcceptRequest(proposalNumber, proposalValue);
+        currentMember.sendAcceptRequest(proposalNumber, proposalValue, currentMember.getMemberId());
       }
     }
   }
 
-  private void handleAcceptRequest(String message) {
+  private void handleAcceptRequest(String message, String memberId) {
+    Member currentMember = members.stream().filter(m -> m.getMemberId().equals(memberId)).findFirst().get();
     String[] parts = message.split(" ");
-    String proposalNumber = parts[1].split("\n")[0];
+    String proposalNumber = parts[1];
+    String proposerId = parts[1].split(":")[0];
+    LocalDateTime now = LocalDateTime.now();
+    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+    String formattedDateTime = now.format(formatter);
+    System.out.println(
+        "[" + formattedDateTime + "]" + " Member " + memberId + " received acceptRequest from proposer " + proposerId
+            + " with proposalNumber " + proposalNumber);
     String proposalValue = parts[2];
-
     if (currentMember.getHighestSeenProposalNumber() == null
-        || compareProposalNumbers(proposalNumber, currentMember.getHighestSeenProposalNumber())) {
+        || compareProposalNumbers(proposalNumber,
+            currentMember.getHighestSeenProposalNumber())) {
       currentMember.setHighestSeenProposalNumber(proposalNumber);
-      currentMember.sendAccepted(proposalNumber, proposalValue);
+      // Send a promise to accept this proposal number
+      currentMember.sendAccepted(proposerId, proposalNumber, proposalValue);
+    } else {
+      // Send a reject message
+      currentMember.sendReject(proposalNumber);
     }
     scheduleTimeoutForAcceptRequest(proposalNumber);
   }
 
-  private void handleAccepted(String message) {
+  private void handleAccepted(String message, String memberId) {
     synchronized (lock) {
       String[] parts = message.split(" ");
-      String proposalNumber = parts[1].split("\n")[0]; // Corrected string splitting
-      System.out.println("acceptedCount: " + acceptedCount.get(proposalNumber));
+      String proposalNumber = parts[1];
+      LocalDateTime now = LocalDateTime.now();
+      DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+      String formattedDateTime = now.format(formatter);
+      System.out.println(
+          "[" + formattedDateTime + "]" + " Proposer " + memberId + " received accepted from member " + memberId);
+      String proposerValue = parts[2];
       acceptedCount.put(proposalNumber, acceptedCount.getOrDefault(proposalNumber, 0) + 1);
 
-      if (acceptedCount.get(proposalNumber) > members.size() / 2) {
+      if (acceptedCount.get(proposalNumber) == 5) {
+        now = LocalDateTime.now();
+        formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+        formattedDateTime = now.format(formatter);
+        System.out
+            .println("[" + formattedDateTime + "]" + " Proposal " + proposalNumber + " IS ACCEPTED BY THE MAJORITY");
         cancelTimeout("accept:" + proposalNumber);
-        currentMember.sendResult("Proposal " + proposalNumber + " is accepted by the majority");
+        now = LocalDateTime.now();
+        formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+        formattedDateTime = now.format(formatter);
+        System.out.println(
+            "[" + formattedDateTime + "]" + " Member " + proposerValue + " is decided to become a president");
+        president = proposerValue;
+        closeAllSockets();
+        communication.closeServerSocket();
       }
     }
   }
@@ -158,8 +205,7 @@ public class VoteServer implements MessageHandler {
     ScheduledFuture<?> timeout = scheduler.schedule(() -> {
       // cancel proposal, start a new one
       promiseCount.remove(proposalNumber);
-      // currentMember.sendPrepareRequest();
-    }, 10, TimeUnit.SECONDS);
+    }, 20, TimeUnit.SECONDS);
     timeouts.put("proposal:" + proposalNumber, timeout);
   }
 
@@ -167,8 +213,7 @@ public class VoteServer implements MessageHandler {
     ScheduledFuture<?> timeout = scheduler.schedule(() -> {
       // cancel accept request, start a new one
       acceptedCount.remove(proposalNumber);
-      // currentMember.sendPrepareRequest();
-    }, 10, TimeUnit.SECONDS);
+    }, 20, TimeUnit.SECONDS);
     timeouts.put("accept:" + proposalNumber, timeout);
   }
 
@@ -186,6 +231,11 @@ public class VoteServer implements MessageHandler {
     if (proposalNumber2 == null) {
       return true;
     }
+
+    if (proposalNumber1.equals(proposalNumber2)) {
+      return true;
+    }
+
     String[] parts1 = proposalNumber1.split(":");
     String[] parts2 = proposalNumber2.split(":");
 
@@ -197,8 +247,37 @@ public class VoteServer implements MessageHandler {
     } else if (count1 > count2) {
       return true;
     } else {
-      return Integer.parseInt(parts1[0]) > Integer.parseInt(parts2[0]);
+      return Integer.parseInt(parts1[0]) >= Integer.parseInt(parts2[0]);
     }
+  }
+
+  private void handleReject(String message, String memberId) {
+    String[] parts = message.split(" ");
+    String proposalNumber = parts[1];
+    LocalDateTime now = LocalDateTime.now();
+    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+    String formattedDateTime = now.format(formatter);
+    System.out
+        .println("[" + formattedDateTime + "]" + " Proposal " + proposalNumber + " is rejected by member " + memberId);
+  }
+
+  public void closeAllSockets() {
+    synchronized (lock) {
+      for (Socket socket : socketMap.values()) {
+        try {
+          if (socket != null && !socket.isClosed()) {
+            socket.close();
+          }
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+      }
+    }
+    socketMap.clear();
+  }
+
+  public String getPresident() {
+    return president;
   }
 
 }

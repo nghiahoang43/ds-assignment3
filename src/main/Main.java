@@ -21,8 +21,8 @@ public class Main {
     // Create some members with unique IDs
     List<Member> members = new ArrayList<>();
     List<Integer> ports = new ArrayList<>();
-    int basePort = 9000;
-    for (int i = 1; i <= 5; i++) {
+    int basePort = 6000;
+    for (int i = 1; i <= 9; i++) {
       String memberId = "" + i;
       Communication communication = new Communication(voteServer);
       Member member = new Member(memberId, communication, voteServer);
